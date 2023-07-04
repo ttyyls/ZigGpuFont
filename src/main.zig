@@ -41,7 +41,12 @@ pub const TableEntry = extern struct {
         var c = (self.id & 0x00FF0000) >> 16;
         var b = (self.id & 0x0000FF00) >> 8;
         var a = (self.id & 0x000000FF);
-        return [_]u8{ @truncate(a), @truncate(b), @truncate(c), @truncate(d) };
+
+        if (@import("builtin").target.cpu.arch.endian() == .Big) {
+            return [_]u8{ @truncate(a), @truncate(b), @truncate(c), @truncate(d) };
+        } else {
+            return [_]u8{ @truncate(d), @truncate(c), @truncate(b), @truncate(a) };
+        }
     }
 };
 
