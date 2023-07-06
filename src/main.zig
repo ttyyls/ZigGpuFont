@@ -214,6 +214,14 @@ pub const GlyfPoint = struct {
     isOnCurve: bool,
 };
 
+pub fn MidpointRounding(a: GlyfPoint, b: GlyfPoint) GlyfPoint {
+    return GlyfPoint{ .X = ((a.X + b.X) / 2.0), .Y = ((a.X + b.X) / 2.0) };
+}
+
+pub fn Bezier(p0: f32, p1: f32, p2: f32, t: f32) f32 {
+    return p1 + std.math.pow(f32, 1.0 - 2.0, 2.0) * (p0 - p1) + std.math.pow(f32, t, 2.0) * (p2 - p1);
+}
+
 pub const ComponentGlyph = struct { Flags: ComponentFlags };
 
 pub const ComponentTriangle = struct {
@@ -229,7 +237,7 @@ pub const Glyf = struct {
     xMax: i16,
     yMax: i16,
 
-    Shapes: SingleArrayList(GlyfPoint) = undefined,
+    Shapes: SingleArrayList(SingleArrayList(GlyfPoint)) = undefined,
     Triangles: SingleArrayList(ComponentTriangle) = undefined,
 
     CountourEnds: SingleArrayList(u16) = undefined,
@@ -361,6 +369,68 @@ pub const Glyf = struct {
                     tmp.append(xVal);
                 }
             }
+
+            re.Points.append(GlyfPoint{
+                .X = tmpXPoints[0],
+                .Y = tmpYPoints[0],
+            });
+            re.Curves.append(lst[0]);
+            for (1..max) |i| {
+                re.Points.append(GlyfPoint{
+                    .X = tmpXPoints[i],
+                    .Y = tmpYPoints[i],
+                    .isOnCurve = lst[i],
+                });
+            }
+
+            var points = SingleArrayList(GlyfPoint).init(allocator);
+            for (re.Points, 0..) |po, i| {
+                points.append(po);
+                if (std.mem.containsAtLeast(u16, re.CountourEnds, 1, i)) {
+                    re.Shapes.append(points);
+                    points = SingleArrayList(GlyfPoint);
+                }
+            }
+
+            for (re.Shapes) |shape| {
+                var i = 1;
+                while (i < shape.Count) {
+                    var a = shape[i];
+                    var b = shape[i - 1];
+                    if (!a.isOnCurve and !b.isOnCurve) {
+                        var midPoint = MidpointRounding(a, b);
+                        midPoint.isMidpoint = true;
+                        shape.insert(allocator, i, midPoint);
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+
+            for (re.Shapes) |shape| {
+                var shapes = shape.clone();
+                shape.items.len = 0;
+                shape.append(shapes[0]);
+                for (1..shapes.len) |i| {
+                    if (!shapes[i].IsOnCurve and !shapes[i].isMidPoint) {
+                        var res: f32 = 15;
+                        var a = if (i == 0) shapes[shapes.len - 1] else shapes[i - 1];
+                        var b = shapes[i];
+                        var c = if ((i + 1) >= shapes.len) shapes[0] else shapes[i + 1];
+
+                        for (0..res) |j| {
+                            var t: u32 = j / res;
+                            shape.append(GlyfPoint{
+                                .X = Bezier(a.X, b.X, c.X, t),
+                                .Y = Bezier(a.Y, b.Y, c.Y, t),
+                            });
+                        }
+                    } else {
+                        shape.append(shapes[i]);
+                    }
+                }
+            }
+            // come back here daddy
         }
     }
 };
@@ -435,7 +505,7 @@ pub const TrueTypeFontFile = struct {
 
                 var iter = self.cMapIndexes.iterator();
                 while (iter.next()) |en| {
-                    print("key: {d} val: {d}\n", .{ en.key_ptr.*, en.value_ptr.* });
+                    print("key: {d:5}\tval: {d:5}\n", .{ en.key_ptr.*, en.value_ptr.* });
                 }
                 return;
             }
