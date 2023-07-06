@@ -8,6 +8,7 @@ const Map = std.AutoHashMap;
 const builtin = @import("builtin");
 
 const native_endian = builtin.target.cpu.arch.endian();
+
 pub fn dump_offset(comptime S: type, ptr: *S, abs_offset: u32) void {
     if (@typeInfo(S) != .Struct) @compileError("dump_ofsets expects a struct as the first argument");
     inline for (std.meta.fields(S)) |f| {
@@ -17,7 +18,20 @@ pub fn dump_offset(comptime S: type, ptr: *S, abs_offset: u32) void {
     }
 }
 
-pub const OutlineFlags = enum(u5) {
+pub fn read_array(
+    alloc: std.mem.Allocator,
+    reader: std.fs.File.Reader,
+    comptime T: type,
+    length: usize,
+) anyerror![]T {
+    var arr: []T = try alloc.alloc(T, length);
+    for (0..length) |x| {
+        arr[x] = try reader.readIntBig(T);
+    }
+    return arr;
+}
+
+pub const OutlineFlags = enum(u8) {
     OnCurve = 1,
     XIsByte = 2,
     YIsByte = 4,
@@ -26,7 +40,7 @@ pub const OutlineFlags = enum(u5) {
     YDelta = 32,
 };
 
-pub const ComponentFlags = enum(u12) {
+pub const ComponentFlags = enum(u16) {
     Arg1And2AreWords = 0x0001,
     ArgsAreXyValues = 0x0002,
     RoundXyToGrid = 0x0004,
@@ -222,6 +236,133 @@ pub const Glyf = struct {
     Points: SingleArrayList(GlyfPoint) = undefined,
     Curves: SingleArrayList(bool) = undefined,
     Components: SingleArrayList(ComponentGlyph) = undefined,
+
+    pub fn readGlyph(
+        allocator: std.mem.Allocator,
+        seeker: std.fs.File.SeekableStream,
+        reader: std.fs.File.Reader,
+        byte: u8,
+    ) !void {
+        _ = byte;
+        var re: Glyf = undefined;
+        var gd: GlyphDescription = reader.readStructBig(GlyphDescription);
+        const TopPos = seeker.getPos();
+        _ = TopPos;
+
+        re.numberOfCountours = gd.numberOfContours;
+        re.xMin = gd.xMin;
+        re.xMax = gd.xMax;
+        re.yMin = gd.yMin;
+        re.yMax = gd.yMax;
+
+        var tmpXPoints = SingleArrayList(i32);
+        var tmpYPoints = SingleArrayList(i32);
+        var lst = SingleArrayList(bool);
+        var flags = SingleArrayList(OutlineFlags);
+        var flagsRes = seeker.getPos();
+        var max = 0;
+
+        if (gd.numberOfContours >= 0) {
+            var endPtsOfContous = read_array(allocator, reader, u16, gd.numberOfContours);
+            for (0..gd.numberOfContours) |i| {
+                re.CountourEnds.append(endPtsOfContous[i]);
+            }
+
+            for (endPtsOfContous) |val| {
+                max = @max(max, val);
+            }
+            max += 1;
+
+            var flagRes = seeker.getPos();
+            var tmpflags = read_array(allocator, reader, u8, max * 2);
+
+            var off = 0;
+
+            for (0..max) |p| {
+                _ = p;
+                var f: OutlineFlags = @enumFromInt(tmpflags[off]);
+                off += 1;
+
+                flags.append(f);
+                lst.append((f & OutlineFlags.OnCurve) == 1);
+
+                if (f & OutlineFlags.Repeat) {
+                    var z = tmpflags[off];
+                    off += 1;
+
+                    for (0..z) |_| {
+                        flags.append(f);
+                        lst.append(f & OutlineFlags.OnCurve);
+                    }
+                }
+            }
+            var xoff = 0;
+
+            seeker.seekTo(flagRes + off);
+            var xPoints = read_array(allocator, reader, u8, max * 2);
+            {
+                var arr = &xPoints;
+                var byteFlag = OutlineFlags.XIsByte;
+                var deltaFlag = OutlineFlags.XDelta;
+                var tmp = tmpXPoints;
+
+                xoff = 0;
+                var xVal = 0;
+
+                for (0..max) |i| {
+                    var flag = flags[i];
+
+                    if (flag & byteFlag) {
+                        if (flag & deltaFlag) {
+                            xVal += arr[xoff];
+                            xoff += 1;
+                        } else {
+                            xVal -= arr[xoff];
+                            xoff += 1;
+                        }
+                    } else if (!(flag & deltaFlag) and !(flag & byteFlag)) {
+                        const a = arr[xoff];
+                        xoff += 1;
+                        const b = arr[xoff];
+                        xoff += 1;
+                        xVal += (b << 16 | a);
+                    }
+                    tmp.append(xVal);
+                }
+            }
+            seeker.setPos(flagsRes + off + xoff);
+            var yPoints = read_array(u8, max * 2);
+            {
+                var arr = &yPoints;
+                var byteFlag = OutlineFlags.YIsByte;
+                var deltaFlag = OutlineFlags.YDelta;
+                var tmp = tmpYPoints;
+
+                xoff = 0;
+                var xVal = 0;
+                for (0..max) |i| {
+                    var flag = flags[i];
+
+                    if (flag & byteFlag) {
+                        if (flag & deltaFlag) {
+                            xVal += arr[xoff];
+                            xoff += 1;
+                        } else {
+                            xVal -= arr[xoff];
+                            xoff += 1;
+                        }
+                    } else if (!(flag & deltaFlag) and !(flag & byteFlag)) {
+                        const a = arr[xoff];
+                        xoff += 1;
+                        const b = arr[xoff];
+                        xoff += 1;
+                        xVal += (b << 16 | a);
+                    }
+                    tmp.append(xVal);
+                }
+            }
+        }
+    }
 };
 
 pub const TrueTypeFontFile = struct {
@@ -247,19 +388,6 @@ pub const TrueTypeFontFile = struct {
         return self;
     }
 
-    pub fn read_array(
-        self: *Self,
-        reader: std.fs.File.Reader,
-        comptime T: type,
-        length: usize,
-    ) anyerror![]T {
-        var arr: []T = try self.allocator.alloc(T, length);
-        for (0..length) |x| {
-            arr[x] = try reader.readIntBig(T);
-        }
-        return arr;
-    }
-
     pub fn read_cmap(
         self: *Self,
         reader: std.fs.File.Reader,
@@ -278,11 +406,11 @@ pub const TrueTypeFontFile = struct {
                 var range = cmap.searchRange;
                 var segcount = @as(u32, cmap.segCountX2) / 2;
 
-                var endCode = try self.read_array(reader, u16, segcount);
+                var endCode = try read_array(self.allocator, reader, u16, segcount);
                 try seeker.seekTo(try seeker.getPos() + 2);
-                var startCode = try self.read_array(reader, u16, segcount);
-                var idDelta = try self.read_array(reader, u16, segcount);
-                var idRangeOffset = try self.read_array(reader, u16, segcount * @as(u32, range));
+                var startCode = try read_array(self.allocator, reader, u16, segcount);
+                var idDelta = try read_array(self.allocator, reader, u16, segcount);
+                var idRangeOffset = try read_array(self.allocator, reader, u16, segcount * @as(u32, range));
 
                 // HACK: support all of utf8 later
                 for (0..255) |charCode| {
@@ -305,10 +433,10 @@ pub const TrueTypeFontFile = struct {
                     }
                 }
 
-                //var iter = self.cMapIndexes.iterator();
-                //while (iter.next()) |en| {
-                //   print("key: {d} val: {d}\n", .{ en.key_ptr.*, en.value_ptr.* });
-                // }
+                var iter = self.cMapIndexes.iterator();
+                while (iter.next()) |en| {
+                    print("key: {d} val: {d}\n", .{ en.key_ptr.*, en.value_ptr.* });
+                }
                 return;
             }
         }
