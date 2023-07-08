@@ -59,7 +59,6 @@ pub const OutlineFlags = enum(u8) {
 };
 
 pub fn isValidOutlineFlag(num: u8) bool {
-    print("{}\n", .{num});
     if ((num > 0) and ((num == 1) or ((num % 2 == 0) and (num <= 32)))) {
         return true;
     }
@@ -262,10 +261,9 @@ pub const Glyf = struct {
     yMin: i16,
     xMax: i16,
     yMax: i16,
-
-    Shapes: SingleArrayList(SingleArrayList(GlyfPoint)) = undefined,
     Triangles: SingleArrayList(ComponentTriangle) = undefined,
 
+    Shapes: SingleArrayList(SingleArrayList(GlyfPoint)) = undefined,
     CountourEnds: SingleArrayList(u16) = undefined,
     Points: SingleArrayList(GlyfPoint) = undefined,
     Curves: SingleArrayList(bool) = undefined,
@@ -324,7 +322,6 @@ pub const Glyf = struct {
             //for (0..max) |p| {
             while (p < max) {
                 var f: u8 = tmpflags[off];
-                print("tmpflags[{}] = {}\n", .{ off, f });
                 off += 1;
 
                 try flags.append(f);
@@ -452,10 +449,10 @@ pub const Glyf = struct {
                 }
             }
 
-            print("\n{d}\n", .{re.Points.items.len});
-            for (re.Points.items) |Contour| {
-                print("Point: .X = {d}, .Y = {d}\n", .{ Contour.X, Contour.Y });
-            }
+            // print("\n{d}\n", .{re.Points.items.len});
+            // for (re.Points.items) |Contour| {
+            //     print("Point: .X = {d}, .Y = {d}\n", .{ Contour.X, Contour.Y });
+            // }
 
             for (0..re.Shapes.items.len) |BigIndex| {
                 var shape = re.Shapes.items[BigIndex];
@@ -547,33 +544,33 @@ pub const TrueTypeFontFile = struct {
                 var endCode = try read_array(self.allocator, reader, u16, segcount);
                 try seeker.seekTo(try seeker.getPos() + 2);
                 var startCode = try read_array(self.allocator, reader, u16, segcount);
-                var idDelta = try read_array(self.allocator, reader, u16, segcount);
-                var idRangeOffset = try read_array(self.allocator, reader, u16, segcount * @as(u32, range));
+                var idDelta = try read_array(self.allocator, reader, i16, segcount);
+                var idRangeOffset = try read_array(self.allocator, reader, i16, segcount * @as(u32, range));
 
                 // HACK: support all of utf8 later
                 for (0..255) |charCode| {
                     const cc: u16 = @truncate(charCode);
+
                     var found: bool = false;
                     for (0..segcount) |segIdx| {
                         if (endCode[segIdx] >= cc and startCode[segIdx] <= cc) {
                             if (idRangeOffset[segIdx] != 0) {
-                                var z = idRangeOffset[segIdx + idRangeOffset[segIdx] / 2 + (charCode - startCode[segIdx])];
+                                var z = idRangeOffset[segIdx + @as(usize, @intCast(idRangeOffset[segIdx])) / 2 + (charCode - startCode[segIdx])];
                                 var delta = idDelta[segIdx];
-                                try self.cMapIndexes.put(@truncate(charCode), z + delta);
+                                try self.cMapIndexes.put(@truncate(charCode), @intCast(z + delta));
                             } else {
-                                try self.cMapIndexes.put(@truncate(charCode), idDelta[segIdx] + @as(u32, @truncate(charCode)));
+                                const a: i16 = idDelta[segIdx];
+                                const b: i32 = @intCast(charCode);
+                                const pp = a + b;
+                                try self.cMapIndexes.put(@truncate(charCode), @intCast(pp));
                             }
                             found = true;
                         }
                     }
+
                     if (!found) {
                         try self.cMapIndexes.put(@truncate(charCode), 0);
                     }
-                }
-
-                var iter = self.cMapIndexes.iterator();
-                while (iter.next()) |en| {
-                    print("key: {d:5}\tval: {d:5}\n", .{ en.key_ptr.*, en.value_ptr.* });
                 }
                 return;
             }
@@ -597,10 +594,10 @@ pub const TrueTypeFontFile = struct {
 
         var i: u32 = 0;
 
-        print("{d}\n", .{off.NumTables});
+        //print("{d}\n", .{off.NumTables});
         while (i < off.NumTables) {
             var te = try reader.readStructBig(TableEntry);
-            print("Reading table at offset 0x{x}\n", .{te.Offset});
+            // print("Reading table at offset 0x{x}\n", .{te.Offset});
             const pos = try seeker.getPos();
             try seeker.seekTo(te.Offset);
             if (te.isId("head")) {
@@ -626,6 +623,12 @@ pub const TrueTypeFontFile = struct {
             i += 1;
         }
 
+        //var iterator = self.cMapIndexes.iterator();
+
+        // while (iterator.next()) |entry| {
+        //     print("K:{} v:{}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+        // }
+
         // HACK: so many intcasts instead of just specifying that charcode is a u8 ?
         for (0..255) |charCode| {
             var maped: u32 = self.cMapIndexes.getEntry(@intCast(charCode)).?.value_ptr.*;
@@ -638,8 +641,7 @@ pub const TrueTypeFontFile = struct {
                 maped,
             );
             try seeker.seekTo(a + b);
-            const x = try seeker.getPos();
-            print("{d}", .{x});
+            //print("self.glyphOffset: {}, GetGlyphOffset: {}, charCode: {}, seeker: {d}\n", .{ self.glyphOffset, b, charCode, a + b });
             try self.glyfs.put(@intCast(charCode), try Glyf.readGlyph(
                 self.allocator,
                 seeker,
