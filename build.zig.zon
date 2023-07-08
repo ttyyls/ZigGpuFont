@@ -1,0 +1,10 @@
+.{
+    .name = "ZigGpuFont",
+    .version = "0.0.0",
+    .dependencies = .{
+    	.@"libtess2" = .{
+		.url = "https://github.com/ttyyls/libtess2/archive/c00b3d59a9c1336e1eaedc22bef78e23799e72d1.tar.gz",
+		.hash = "1220e00b4d77d8fdcc25768aba1cf29050ecae982182e4f6ff0a6143d4909184b2f1",
+	},
+    },
+}
