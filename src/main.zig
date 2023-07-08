@@ -37,14 +37,16 @@ pub fn GetGlyphOffset(
     seeker: std.fs.File.SeekableStream,
     reader: std.fs.File.Reader,
     index: u32,
-) anyerror!u16 {
+) anyerror!u32 {
     if (header.IndexToLocFormat == 1) {
-        try seeker.seekTo(te.Offset + index * 4);
-        return reader.readIntBig(u16);
+        const off = te.Offset + index * 4;
+        try seeker.seekTo(off);
+        const x = reader.readIntBig(u32);
+        return x;
     }
 
     try seeker.seekTo(te.Offset + index * 2);
-    return try reader.readIntBig(u16) * 2;
+    return @as(u32, @intCast(try reader.readIntBig(u16) * 2));
 }
 
 pub const OutlineFlags = enum(u8) {
@@ -57,7 +59,8 @@ pub const OutlineFlags = enum(u8) {
 };
 
 pub fn isValidOutlineFlag(num: u8) bool {
-    if ((num == 1) or ((num % 2 == 0) and (num <= 32))) {
+    print("{}\n", .{num});
+    if ((num > 0) and ((num == 1) or ((num % 2 == 0) and (num <= 32)))) {
         return true;
     }
     return false;
@@ -277,7 +280,6 @@ pub const Glyf = struct {
         _ = byte;
         var re: Glyf = undefined;
         var gd: GlyphDescription = try reader.readStructBig(GlyphDescription);
-        const TopPos = try seeker.getPos();
 
         re.numberOfCountours = gd.numberOfContours;
         re.CountourEnds = SingleArrayList(u16).init(allocator);
@@ -285,11 +287,14 @@ pub const Glyf = struct {
         re.xMax = gd.xMax;
         re.yMin = gd.yMin;
         re.yMax = gd.yMax;
+        re.Points = SingleArrayList(GlyfPoint).init(allocator);
+        re.Curves = SingleArrayList(bool).init(allocator);
+        re.Shapes = SingleArrayList(SingleArrayList(GlyfPoint)).init(allocator);
 
         var tmpXPoints = SingleArrayList(i32).init(allocator);
         var tmpYPoints = SingleArrayList(i32).init(allocator);
         var lst = SingleArrayList(bool).init(allocator);
-        var flags = SingleArrayList(OutlineFlags).init(allocator);
+        var flags = SingleArrayList(u8).init(allocator);
         var max: u32 = 0;
 
         if (gd.numberOfContours >= 0) {
@@ -308,32 +313,38 @@ pub const Glyf = struct {
             }
             max += 1;
 
+            var instructionLength = (try read_array(allocator, reader, u16, 1))[0];
+            _ = try read_array(allocator, reader, u8, instructionLength);
+
             var flagRes = try seeker.getPos();
             var tmpflags = try read_array(allocator, reader, u8, max * 2);
 
             var off: u32 = 0;
-            for (0..max) |p| {
-                _ = p;
+            var p: u32 = 0;
+            //for (0..max) |p| {
+            while (p < max) {
                 var f: u8 = tmpflags[off];
+                print("tmpflags[{}] = {}\n", .{ off, f });
                 off += 1;
 
-                if (isValidOutlineFlag(f)) {
-                    try flags.append(@as(OutlineFlags, @enumFromInt(f)));
-                }
+                try flags.append(f);
 
                 try lst.append((f & @intFromEnum(OutlineFlags.OnCurve)) == 1);
 
                 if ((f & @intFromEnum(OutlineFlags.Repeat)) == 1) {
                     var z = tmpflags[off];
                     off += 1;
+                    p += 1;
 
                     for (0..z) |_| {
-                        try flags.append(@enumFromInt(f));
+                        try flags.append(f);
                         try lst.append((f & @intFromEnum(OutlineFlags.OnCurve)) == 1);
                     }
                 }
+
+                p += 1;
             }
-            var xoff: i32 = 0;
+            var xoff: usize = 0;
 
             try seeker.seekTo(flagRes + off);
             var xPoints = try read_array(allocator, reader, u8, max * 2);
@@ -342,69 +353,73 @@ pub const Glyf = struct {
                 var arr = xPoints;
                 var byteFlag = OutlineFlags.XIsByte;
                 var deltaFlag = OutlineFlags.XDelta;
-                var tmp = tmpXPoints;
 
                 xoff = 0;
                 var xVal: i32 = 0;
 
                 for (0..max) |i| {
+                    if (i >= flags.items.len)
+                        break;
                     var flag = flags.items[i];
 
-                    if (@intFromEnum(flag) & @intFromEnum(byteFlag) == 1) {
-                        if ((@intFromEnum(flag) & @intFromEnum(deltaFlag)) == 1) {
-                            xVal += arr[@intCast(xoff)];
+                    //print("{d}\n", .{@intFromEnum(byteFlag)});
+                    if (flag & @intFromEnum(byteFlag) != 0) {
+                        if ((flag & @intFromEnum(deltaFlag)) != 0) {
+                            xVal += arr[xoff];
                             xoff += 1;
                         } else {
-                            xVal -= arr[@intCast(xoff)];
+                            xVal -= arr[xoff];
                             xoff += 1;
                         }
                         // zig fmt: off
-                    } else if (!((@intFromEnum(flag) & @intFromEnum(deltaFlag)) == 1) 
-                        and !((@intFromEnum(flag) & @intFromEnum(byteFlag)) == 1)) {
+                    } else if (
+                        (flag & @intFromEnum(deltaFlag)) == 0 and (flag & @intFromEnum(byteFlag)) == 0) {
                         // zig fmt: on
-                        const a = arr[@intCast(xoff)];
+                        const a = arr[xoff];
                         xoff += 1;
-                        const b = arr[@intCast(xoff)];
+                        const b = arr[xoff];
                         xoff += 1;
-                        print("a: {}, b: {}", .{ @TypeOf(a), @TypeOf(b) });
-                        //xVal += ((b << @as(u32, 8)) | a);
+                        // print("a: {}, b: {}", .{ @TypeOf(a), @TypeOf(b) });
+                        xVal += @as(i16, a) << 8 | b;
                     }
-                    try tmp.append(xVal);
+                    try tmpXPoints.append(xVal);
                 }
             }
-            try seeker.seekTo(TopPos + off + @as(u64, @intCast(xoff)));
+            try seeker.seekTo(flagRes + off + @as(u64, @intCast(xoff)));
             var yPoints = try read_array(allocator, reader, u8, max * 2);
             {
                 var arr = yPoints;
-                _ = arr;
                 var byteFlag = OutlineFlags.YIsByte;
                 var deltaFlag = OutlineFlags.YDelta;
-                var tmp = tmpYPoints;
 
                 xoff = 0;
                 var xVal: i32 = 0;
+
                 for (0..max) |i| {
+                    if (i >= flags.items.len)
+                        break;
                     var flag = flags.items[i];
 
-                    if (@intFromEnum(flag) & @intFromEnum(byteFlag) == 1) {
-                        if ((@intFromEnum(flag) & @intFromEnum(deltaFlag)) == 1) {
-                            // xVal += arr.*[@intCast(xoff)];
+                    if (flag & @intFromEnum(byteFlag) != 0) {
+                        if ((flag & @intFromEnum(deltaFlag)) != 0) {
+                            xVal += arr[xoff];
                             xoff += 1;
                         } else {
-                            //xVal -= arr.*[@intCast(xoff)];
+                            xVal -= arr[xoff];
                             xoff += 1;
                         }
                         // zig fmt: off
-                    } else if (!((@intFromEnum(flag) & @intFromEnum(deltaFlag)) == 1) 
-                        and !((@intFromEnum(flag) & @intFromEnum(byteFlag)) == 1)) {
+                    } else if (!((flag & @intFromEnum(deltaFlag)) != 0) 
+                        and !((flag & @intFromEnum(byteFlag)) != 0)) {
                         // zig fmt: on
-                        //const a = arr.*[@intCast(xoff)];
+                        const a = arr[xoff];
                         xoff += 1;
-                        //const b = arr.*[@intCast(xoff)];
+                        const b = arr[xoff];
                         xoff += 1;
-                        //xVal += (b <<| 16 | a);
+                        // print("a: {}, b: {}", .{ @TypeOf(a), @TypeOf(b) });
+                        xVal += @as(i16, a) << 8 | b;
                     }
-                    try tmp.append(xVal);
+                    try tmpYPoints.append(xVal);
                 }
             }
 
@@ -419,23 +434,33 @@ pub const Glyf = struct {
                     .Y = @floatFromInt(tmpYPoints.items[i]),
                     .isOnCurve = lst.items[i],
                 });
+                try re.Curves.append(lst.items[i]);
             }
 
             var points = SingleArrayList(GlyfPoint).init(allocator);
-            for (re.Points.items, 0..) |po, i| {
-                _ = i;
-                try points.append(po);
+            for (0..re.Points.items.len) |i| {
+                try points.append(re.Points.items[i]);
+
                 // HACK: this is nonsense
-                // if (std.mem.containsAtLeast(u16, re.CountourEnds.items, 1, i)) {
-                //     re.Shapes.append(points);
-                //     points = SingleArrayList(GlyfPoint);
-                // }
+                //if (re.ContourEnds.Contains((ushort) i))
+
+                for (re.CountourEnds.items) |item| {
+                    if (item == @as(u16, @intCast(i))) {
+                        try re.Shapes.append(points);
+                        points = SingleArrayList(GlyfPoint).init(allocator);
+                    }
+                }
             }
 
-            for (0..re.Shapes.capacity) |BigIndex| {
+            print("\n{d}\n", .{re.Points.items.len});
+            for (re.Points.items) |Contour| {
+                print("Point: .X = {d}, .Y = {d}\n", .{ Contour.X, Contour.Y });
+            }
+
+            for (0..re.Shapes.items.len) |BigIndex| {
                 var shape = re.Shapes.items[BigIndex];
                 var i: u32 = 1;
-                while (i < shape.capacity) {
+                while (i < shape.items.len) {
                     var a = shape.items[i];
                     var b = shape.items[i - 1];
                     if (!a.isOnCurve and !b.isOnCurve) {
@@ -473,9 +498,7 @@ pub const Glyf = struct {
             // }
             // NOTE: come back here daddy
         }
-        for (re.Points.items) |Contour| {
-            print("Point: .X = {d}, .Y = {d}\n", .{ Contour.X, Contour.Y });
-        }
+
         return re;
     }
 };
@@ -572,10 +595,6 @@ pub const TrueTypeFontFile = struct {
     ) !void {
         var off: OffsetTable = try reader.readStructBig(OffsetTable);
 
-        const glyfOffsets = SingleArrayList(u32).init(self.allocator);
-        const glyfOffset = 0;
-        _ = glyfOffsets;
-
         var i: u32 = 0;
 
         print("{d}\n", .{off.NumTables});
@@ -610,13 +629,17 @@ pub const TrueTypeFontFile = struct {
         // HACK: so many intcasts instead of just specifying that charcode is a u8 ?
         for (0..255) |charCode| {
             var maped: u32 = self.cMapIndexes.getEntry(@intCast(charCode)).?.value_ptr.*;
-            try seeker.seekTo(glyfOffset + try GetGlyphOffset(
+            const a = self.glyphOffset;
+            const b = try GetGlyphOffset(
                 self.glyphOffsetTe,
                 self.header,
                 seeker,
                 reader,
                 maped,
-            ));
+            );
+            try seeker.seekTo(a + b);
+            const x = try seeker.getPos();
+            print("{d}", .{x});
             try self.glyfs.put(@intCast(charCode), try Glyf.readGlyph(
                 self.allocator,
                 seeker,
