@@ -1,4 +1,7 @@
 const std = @import("std");
+const tessy = @cImport({
+    @cInclude("tesselator.h");
+});
 const print = std.debug.print;
 const io = std.io;
 const mem = std.mem;
@@ -256,14 +259,13 @@ pub const ComponentTriangle = struct {
 };
 
 pub const Glyf = struct {
-    numberOfCountours: i16,
     xMin: i16,
     yMin: i16,
     xMax: i16,
     yMax: i16,
     Triangles: SingleArrayList(ComponentTriangle) = undefined,
-
     Shapes: SingleArrayList(SingleArrayList(GlyfPoint)) = undefined,
+    numberOfCountours: i16,
     CountourEnds: SingleArrayList(u16) = undefined,
     Points: SingleArrayList(GlyfPoint) = undefined,
     Curves: SingleArrayList(bool) = undefined,
@@ -319,7 +321,6 @@ pub const Glyf = struct {
 
             var off: u32 = 0;
             var p: u32 = 0;
-            //for (0..max) |p| {
             while (p < max) {
                 var f: u8 = tmpflags[off];
                 off += 1;
@@ -669,4 +670,14 @@ pub fn main() !void {
     var fontFile = TrueTypeFontFile{};
     _ = fontFile.init(alloc);
     try fontFile.load_file("Hack-Regular.ttf");
+
+    std.debug.print("pre call of libtess2 \n", .{});
+
+    const tess = tessy.tessNewTess(null);
+    if (tess == null)
+        print("Death\n", .{});
+
+    tessy.tessSetOption(tess, tessy.TESS_CONSTRAINED_DELAUNAY_TRIANGULATION, 1);
+
+    std.debug.print("post call of libtess2\n", .{});
 }
