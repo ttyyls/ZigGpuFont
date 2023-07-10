@@ -41,7 +41,7 @@ pub fn GetGlyphOffset(
     reader: std.fs.File.Reader,
     index: u32,
 ) anyerror!u32 {
-    if (header.IndexToLocFormat == 1) {
+    if (header.IndexToLocFormat > 0) {
         const off = te.Offset + index * 4;
         try seeker.seekTo(off);
         const x = reader.readIntBig(u32);
@@ -62,7 +62,7 @@ pub const OutlineFlags = enum(u8) {
 };
 
 pub fn isValidOutlineFlag(num: u8) bool {
-    if ((num > 0) and ((num == 1) or ((num % 2 == 0) and (num <= 32)))) {
+    if ((num > 0) and ((num > 0) or ((num % 2 == 0) and (num <= 32)))) {
         return true;
     }
     return false;
@@ -250,7 +250,21 @@ pub fn Bezier(p0: f32, p1: f32, p2: f32, t: f32) f32 {
     return p1 + std.math.pow(f32, 1.0 - 2.0, 2.0) * (p0 - p1) + std.math.pow(f32, t, 2.0) * (p2 - p1);
 }
 
-pub const ComponentGlyph = struct { Flags: ComponentFlags };
+pub const ComponentGlyph = struct {
+    Flags: ComponentFlags,
+    GlyphIndex: u16 = undefined,
+    Argument1: i32 = undefined,
+    Argument2: i32 = undefined,
+    DestPointIndex: i32 = undefined,
+    SrcPointIndex: i32 = undefined,
+
+    A: i32 = 1,
+    B: i32 = 0,
+    C: i32 = 0,
+    D: i32 = 1,
+    E: i32 = 0,
+    F: i32 = 0,
+};
 
 pub const ComponentTriangle = struct {
     A: GlyfPoint,
@@ -280,6 +294,7 @@ pub const Glyf = struct {
         _ = byte;
         var re: Glyf = undefined;
         var gd: GlyphDescription = try reader.readStructBig(GlyphDescription);
+        var TopPos = try seeker.getPos();
 
         re.numberOfCountours = gd.numberOfContours;
         re.CountourEnds = SingleArrayList(u16).init(allocator);
@@ -327,16 +342,16 @@ pub const Glyf = struct {
 
                 try flags.append(f);
 
-                try lst.append((f & @intFromEnum(OutlineFlags.OnCurve)) == 1);
+                try lst.append((f & @intFromEnum(OutlineFlags.OnCurve)) > 0);
 
-                if ((f & @intFromEnum(OutlineFlags.Repeat)) == 1) {
+                if ((f & @intFromEnum(OutlineFlags.Repeat)) > 0) {
                     var z = tmpflags[off];
                     off += 1;
                     p += 1;
 
                     for (0..z) |_| {
                         try flags.append(f);
-                        try lst.append((f & @intFromEnum(OutlineFlags.OnCurve)) == 1);
+                        try lst.append((f & @intFromEnum(OutlineFlags.OnCurve)) > 0);
                     }
                 }
 
@@ -470,33 +485,144 @@ pub const Glyf = struct {
                     i += 1;
                 }
             }
+            for (0..re.Shapes.items.len) |index| {
+                var _shape = try re.Shapes.items[index].clone();
+                re.Shapes.items[index].items.len = 0;
+                try re.Shapes.items[index].append(_shape.items[0]);
+                for (1.._shape.items.len) |i| {
+                    if (!_shape.items[i].isOnCurve and !_shape.items[i].isMidpoint) {
+                        var res: f32 = 15;
 
-            // for (re.Shapes.items) |shape| {
-            //     var shapes = shape.clone();
-            //     shape.items.len = 0;
-            //     shape.append(shapes[0]);
-            //     for (1..shapes.len) |i| {
-            //         if (!shapes[i].IsOnCurve and !shapes[i].isMidPoint) {
-            //             var res: f32 = 15;
-            //             var a = if (i == 0) shapes[shapes.len - 1] else shapes[i - 1];
-            //             var b = shapes[i];
-            //             var c = if ((i + 1) >= shapes.len) shapes[0] else shapes[i + 1];
-            //
-            //             for (0..res) |j| {
-            //                 var t: u32 = j / res;
-            //                 shape.append(GlyfPoint{
-            //                     .X = Bezier(a.X, b.X, c.X, t),
-            //                     .Y = Bezier(a.Y, b.Y, c.Y, t),
-            //                 });
-            //             }
-            //         } else {
-            //             shape.append(shapes[i]);
-            //         }
-            //     }
-            // }
-            // NOTE: come back here daddy
+                        var a: GlyfPoint = if (i == 0) _shape.items[_shape.items.len - 1] else _shape.items[i - 1];
+                        var b: GlyfPoint = _shape.items[i];
+                        var c: GlyfPoint = if ((i + 1) >= _shape.items.len) _shape.items[0] else _shape.items[i + 1];
+
+                        for (0..@intFromFloat(res)) |j| {
+                            var t = @as(f32, @floatFromInt(j)) / res;
+                            try re.Shapes.items[index].append(GlyfPoint{
+                                .X = Bezier(a.X, b.X, c.X, t),
+                                .Y = Bezier(a.Y, b.Y, c.Y, t),
+                            });
+                        }
+                    } else {
+                        try re.Shapes.items[index].append(_shape.items[i]);
+                    }
+                }
+            }
+            // now triangulate glyf
+
+            var tess = tessy.tessNewTess(null);
+            defer tessy.tessDeleteTess(tess);
+            for (re.Shapes.items) |shape| {
+                _ = tessy.tessAddContour(
+                    tess,
+                    2,
+                    &shape.items[0],
+                    @sizeOf(GlyfPoint),
+                    @intCast(shape.items.len),
+                );
+                //for (0..shape.items.len) |i| {
+                //    const point = shape.items[i];
+                //    _ = point;
+                //    contour[i] = tessy.new_vertex;
+                //}
+                // tessy.add_coutour(contour);
+            }
+
+            _ = tessy.tessTesselate(
+                tess,
+                tessy.TESS_WINDING_ODD,
+                tessy.TESS_POLYGONS,
+                3,
+                2,
+                null,
+            );
+
+            const nelems: usize = @intCast(tessy.tessGetElementCount(tess));
+            const elems = tessy.tessGetElements(tess);
+
+            const verts = tessy.tessGetVertices(tess);
+
+            for (0..nelems) |i| {
+                const a = verts[@intCast(elems[(i * 3)])];
+                const a1 = verts[@intCast(elems[(i * 3)] + 1)];
+
+                const b = verts[@intCast(elems[((i + 1) * 3)])];
+                const b1 = verts[@intCast(elems[((i + 1) * 3)] + 1)];
+
+                const c = verts[@intCast(elems[((i + 2) * 3)])];
+                const c1 = verts[@intCast(elems[((i + 2) * 3)] + 1)];
+
+                try re.Triangles.append(
+                    ComponentTriangle{
+                        .A = GlyfPoint{
+                            .X = a,
+                            .Y = a1,
+                        },
+                        .B = GlyfPoint{
+                            .X = b,
+                            .Y = b1,
+                        },
+                        .C = GlyfPoint{
+                            .X = c,
+                            .Y = c1,
+                        },
+                    },
+                );
+            }
+        } else {
+            try seeker.seekTo(TopPos);
+            var components = SingleArrayList(ComponentGlyph).init(allocator);
+            var flag = ComponentFlags.MoreComponents;
+
+            while ((@intFromEnum(flag) & @intFromEnum(ComponentFlags.MoreComponents)) > 0) {
+                var fval = (try read_array(allocator, reader, u16, 1))[0];
+                flag = @enumFromInt(fval);
+                var component: ComponentGlyph = undefined;
+
+                component.Flags = flag;
+
+                if ((@intFromEnum(flag) & @intFromEnum(ComponentFlags.Arg1And2AreWords)) > 0) {
+                    component.Argument1 = (try read_array(allocator, reader, u16, 1))[0];
+                    component.Argument2 = (try read_array(allocator, reader, u16, 1))[0];
+                } else {
+                    component.Argument1 = (try read_array(allocator, reader, u8, 1))[0];
+                    component.Argument2 = (try read_array(allocator, reader, u8, 1))[0];
+                }
+
+                if ((@intFromEnum(flag) & @intFromEnum(ComponentFlags.ArgsAreXyValues)) > 0) {
+                    component.E = component.Argument1;
+                    component.F = component.Argument2;
+                } else {
+                    component.DestPointIndex = component.Argument1;
+                    component.SrcPointIndex = component.Argument2;
+                }
+
+                if ((@intFromEnum(flag) & @intFromEnum(ComponentFlags.WeHaveAScale)) > 0) {
+                    component.A = @divTrunc((try read_array(allocator, reader, u16, 1))[0], (@as(i32, 1) << 14));
+                    component.D = component.A;
+                } else if ((@intFromEnum(flag) & @intFromEnum(ComponentFlags.WeHaveAnXAndYScale)) > 0) {
+                    component.A = @divTrunc((try read_array(allocator, reader, u16, 1))[0], (@as(i32, 1) << 14));
+                    component.D = @divTrunc((try read_array(allocator, reader, u16, 1))[0], (@as(i32, 1) << 14));
+                } else if ((@intFromEnum(flag) & @intFromEnum(ComponentFlags.WeHaveATwoByTwo)) > 0) {
+                    component.A = @divTrunc((try read_array(allocator, reader, u16, 1))[0], (@as(i32, 1) << 14));
+                    component.B = @divTrunc((try read_array(allocator, reader, u16, 1))[0], (@as(i32, 1) << 14));
+                    component.C = @divTrunc((try read_array(allocator, reader, u16, 1))[0], (@as(i32, 1) << 14));
+                    component.D = @divTrunc((try read_array(allocator, reader, u16, 1))[0], (@as(i32, 1) << 14));
+                }
+
+                try components.append(component);
+            }
+
+            if ((@intFromEnum(flag) & @intFromEnum(ComponentFlags.WeHaveInstructions)) > 0) {
+                var off = (try read_array(allocator, reader, u16, 1))[0];
+                try seeker.seekTo((try seeker.getPos()) + off);
+            }
+
+            for (components.items) |_component| {
+                try re.Components.append(_component);
+            }
         }
-
         return re;
     }
 };
@@ -631,8 +757,10 @@ pub const TrueTypeFontFile = struct {
         // }
 
         // HACK: so many intcasts instead of just specifying that charcode is a u8 ?
-        for (0..255) |charCode| {
-            var maped: u32 = self.cMapIndexes.getEntry(@intCast(charCode)).?.value_ptr.*;
+        // This should be a bit more correct now
+        for (0..255) |captured_charCode| {
+            const charCode: u8 = @intCast(captured_charCode);
+            var maped: u32 = self.cMapIndexes.getEntry(charCode).?.value_ptr.*;
             const a = self.glyphOffset;
             const b = try GetGlyphOffset(
                 self.glyphOffsetTe,
@@ -643,32 +771,137 @@ pub const TrueTypeFontFile = struct {
             );
             try seeker.seekTo(a + b);
             //print("self.glyphOffset: {}, GetGlyphOffset: {}, charCode: {}, seeker: {d}\n", .{ self.glyphOffset, b, charCode, a + b });
-            try self.glyfs.put(@intCast(charCode), try Glyf.readGlyph(
+            try self.glyfs.put(charCode, try Glyf.readGlyph(
                 self.allocator,
                 seeker,
                 reader,
-                @intCast(charCode),
+                charCode,
             ));
         }
 
-        // FIXME: iterator on hashmaps?
-        // var iterator = self.glyfs.iterator();
-        // for (iterator.next()) |en| {
-        //     if (en.value_ptr.Components.count() != 0) {}
-        // }
-    }
+        // HACK: to call it simply ugly or a hack is an understatement
+        // wasteful spaghetti scoping hell doesn't begin to describe it
+        // this monstrosity is the result of zig's immutability on consts,
+        // and kv pair invalidation on mutation of hashmaps. yeet
+        {
+            for (0..self.glyfs.count()) |iter| {
+                if (self.glyfs.get(@intCast(iter)).?.Components.items.len != 0) {
+                    // NOTE: the rest of this code block assumes the clone preserves the exact same kv pairs
+                    var glyfs_clone = try self.glyfs.clone();
+                    var iterator = self.glyfs.iterator();
+                    while (iterator.next()) |glyf_in_a_box| {
+                        var components = glyf_in_a_box.value_ptr.*.Components;
+                        for (components.items) |component| {
+                            try seeker.seekTo(self.glyphOffset + try GetGlyphOffset(
+                                self.glyphOffsetTe,
+                                self.header,
+                                seeker,
+                                reader,
+                                component.GlyphIndex,
+                            ));
+                            var g: Glyf = try Glyf.readGlyph(
+                                self.allocator,
+                                seeker,
+                                reader,
+                                //  maybe this is what the cs did?
+                                // glyf_in_a_box.key_ptr.*,
+                                // but it's more likely to be the latter
+                                @intCast(iter),
+                            );
 
+                            var shapes = try g.Triangles.clone();
+                            if ((@intFromEnum(component.Flags) & @intFromEnum(ComponentFlags.UseMyMetrics)) > 0) {
+                                // glyfs_clone.getPtr(@intCast(iter)).?.*.xMax = g.xMax;
+                                // glyfs_clone.getPtr(@intCast(iter)).?.*.xMin = g.xMin;
+                                // glyfs_clone.getPtr(@intCast(iter)).?.*.yMax = g.yMax;
+                                // glyfs_clone.getPtr(@intCast(iter)).?.*.yMin = g.yMin;
+                                try glyfs_clone.put(@intCast(iter), g);
+                            }
+
+                            for (0..shapes.items.len) |t| {
+                                // NOTE: this clobbers the shapes object, yet len is not invalidated as it is a slice
+                                // from what is an ArrayList that has no iterators to invalidate on mutation anyway.
+                                // AND yet we're cloning it ???
+
+                                // shapes.items[t].A.X = component.A * shapes.items[t].A.X + component.B * shapes.items[t].A.Y + component.E;
+                                // shapes.items[t].A.Y = component.C * shapes.items[t].A.X + component.D * shapes.items[t].A.Y + component.F;
+                                // shapes.items[t].B.X = component.A * shapes.items[t].B.X + component.B * shapes.items[t].B.Y + component.E;
+                                // shapes.items[t].B.Y = component.C * shapes.items[t].B.X + component.D * shapes.items[t].B.Y + component.F;
+                                // shapes.items[t].C.X = component.A * shapes.items[t].C.X + component.B * shapes.items[t].C.Y + component.E;
+                                // shapes.items[t].C.Y = component.C * shapes.items[t].C.X + component.D * shapes.items[t].C.Y + component.F;
+
+                                // the following code fixes the casting issues.. but at what cost
+
+                                var temp = shapes.items[t];
+                                // stand-in jit type def 'cause zig won't let me use an anon one :(
+                                const casted_component_t = struct {
+                                    A: f32 = undefined,
+                                    B: f32 = undefined,
+                                    C: f32 = undefined,
+                                    D: f32 = undefined,
+                                    E: f32 = undefined,
+                                    F: f32 = undefined,
+                                };
+                                var casted_component = casted_component_t{
+                                    .A = @as(f32, @floatFromInt(component.A)),
+                                    .B = @as(f32, @floatFromInt(component.B)),
+                                    .C = @as(f32, @floatFromInt(component.C)),
+                                    .D = @as(f32, @floatFromInt(component.D)),
+                                    .E = @as(f32, @floatFromInt(component.E)),
+                                    .F = @as(f32, @floatFromInt(component.F)),
+                                };
+                                shapes.items[t] = ComponentTriangle{
+                                    .A = GlyfPoint{
+                                        .X = casted_component.A * temp.A.X + casted_component.B * temp.A.Y + casted_component.E,
+                                        .Y = casted_component.C * temp.A.X + casted_component.D * temp.A.Y + casted_component.F,
+                                    },
+                                    .B = GlyfPoint{
+                                        .X = casted_component.A * temp.B.X + casted_component.B * temp.B.Y + casted_component.E,
+                                        .Y = casted_component.C * temp.B.X + casted_component.D * temp.B.Y + casted_component.F,
+                                    },
+                                    .C = GlyfPoint{
+                                        .X = casted_component.A * temp.C.X + casted_component.B * temp.C.Y + casted_component.E,
+                                        .Y = casted_component.C * temp.C.X + casted_component.D * temp.C.Y + casted_component.F,
+                                    },
+                                };
+                            }
+                            // HACK: insane bs again
+                            var glyfs_clone_iterator = glyfs_clone.iterator();
+                            while (glyfs_clone_iterator.next()) |glyfs_clone_delivery| {
+                                for (shapes.items) |shape| {
+                                    try glyfs_clone_delivery.value_ptr.Triangles.append(shape);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // TODO: deinit enough to stop the leakage
     pub fn deinit(self: *Self) !void {
         _ = self;
     }
 };
 
+pub fn print_usage() void {
+    std.debug.print(
+        \\ usage:
+        \\ --help -h    prints this help message
+    , .{});
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
+    const cator = gpa.allocator();
+    // HACK: too many leaks
+    // defer _ = gpa.deinit();
+
+    var args = try std.process.argsAlloc(cator);
+    defer std.process.argsFree(cator, args);
 
     var fontFile = TrueTypeFontFile{};
-    _ = fontFile.init(alloc);
+    _ = fontFile.init(cator);
     try fontFile.load_file("Hack-Regular.ttf");
 
     std.debug.print("pre call of libtess2 \n", .{});
