@@ -305,6 +305,7 @@ pub const Glyf = struct {
         re.Points = SingleArrayList(GlyfPoint).init(allocator);
         re.Curves = SingleArrayList(bool).init(allocator);
         re.Shapes = SingleArrayList(SingleArrayList(GlyfPoint)).init(allocator);
+        re.Triangles = SingleArrayList(ComponentTriangle).init(allocator);
 
         var tmpXPoints = SingleArrayList(i32).init(allocator);
         var tmpYPoints = SingleArrayList(i32).init(allocator);
@@ -487,7 +488,8 @@ pub const Glyf = struct {
             }
             for (0..re.Shapes.items.len) |index| {
                 var _shape = try re.Shapes.items[index].clone();
-                re.Shapes.items[index].items.len = 0;
+                //mem leak lets GO!!!!
+                re.Shapes.items[index] = SingleArrayList(GlyfPoint).init(allocator);
                 try re.Shapes.items[index].append(_shape.items[0]);
                 for (1.._shape.items.len) |i| {
                     if (!_shape.items[i].isOnCurve and !_shape.items[i].isMidpoint) {
@@ -543,30 +545,47 @@ pub const Glyf = struct {
 
             const verts = tessy.tessGetVertices(tess);
 
-            for (0..nelems) |i| {
-                const a = verts[@intCast(elems[(i * 3)])];
-                const a1 = verts[@intCast(elems[(i * 3)] + 1)];
+            print("\n", .{});
 
-                const b = verts[@intCast(elems[((i + 1) * 3)])];
-                const b1 = verts[@intCast(elems[((i + 1) * 3)] + 1)];
+            var tp = SingleArrayList(GlyfPoint).init(allocator);
+            defer tp.deinit();
 
-                const c = verts[@intCast(elems[((i + 2) * 3)])];
-                const c1 = verts[@intCast(elems[((i + 2) * 3)] + 1)];
+            for (0..nelems) |x| {
+                const a_x = verts[@intCast(elems[(x * 3)] + 0)];
+                const a_y = verts[@intCast(elems[(x * 3)] + 1)];
+                const b_x = verts[@intCast(elems[(x * 3)] + 2)];
+                const b_y = verts[@intCast(elems[(x * 3)] + 3)];
+                const c_x = verts[@intCast(elems[(x * 3)] + 4)];
+                const c_y = verts[@intCast(elems[(x * 3)] + 5)];
+
+                try tp.append(GlyfPoint{
+                    .X = a_x,
+                    .Y = a_y,
+                });
+
+                try tp.append(GlyfPoint{
+                    .X = b_x,
+                    .Y = b_y,
+                });
+
+                try tp.append(GlyfPoint{
+                    .X = c_x,
+                    .Y = c_y,
+                });
+            }
+
+            for (0..(tp.items.len / 3)) |i| {
+                const a = tp.items[(i * 3)];
+                const b = tp.items[(i * 3) + 1];
+                const c = tp.items[(i * 3) + 2];
+
+                print("a = [{d},{d}]; b = [{d},{d}]; c = [{d},{d}]\n", .{ a.X, a.Y, b.X, b.Y, c.X, c.Y });
 
                 try re.Triangles.append(
                     ComponentTriangle{
-                        .A = GlyfPoint{
-                            .X = a,
-                            .Y = a1,
-                        },
-                        .B = GlyfPoint{
-                            .X = b,
-                            .Y = b1,
-                        },
-                        .C = GlyfPoint{
-                            .X = c,
-                            .Y = c1,
-                        },
+                        .A = a,
+                        .B = b,
+                        .C = c,
                     },
                 );
             }
