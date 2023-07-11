@@ -17,7 +17,8 @@ pub fn dump_offset(comptime S: type, ptr: *S, abs_offset: u32) void {
     inline for (std.meta.fields(S)) |f| {
         const offset = @intFromPtr(&@field(ptr, f.name)) - @intFromPtr(ptr);
         const abs = offset + abs_offset;
-        print("{s} = relative: {}, abs: 0x{x}\n", .{ f.name, offset, abs });
+        _ = abs;
+        //print("{s} = relative: {}, abs: 0x{x}\n", .{ f.name, offset, abs });
     }
 }
 
@@ -471,46 +472,47 @@ pub const Glyf = struct {
             //     print("Point: .X = {d}, .Y = {d}\n", .{ Contour.X, Contour.Y });
             // }
 
-            for (0..re.Shapes.items.len) |BigIndex| {
-                var shape = re.Shapes.items[BigIndex];
-                var i: u32 = 1;
-                while (i < shape.items.len) {
-                    var a = shape.items[i];
-                    var b = shape.items[i - 1];
-                    if (!a.isOnCurve and !b.isOnCurve) {
-                        var midPoint = MidpointRounding(a, b);
-                        midPoint.isMidpoint = true;
-                        try shape.insert(i, midPoint);
-                        i += 1;
-                    }
-                    i += 1;
-                }
-            }
-            for (0..re.Shapes.items.len) |index| {
-                var _shape = try re.Shapes.items[index].clone();
-                //mem leak lets GO!!!!
-                re.Shapes.items[index] = SingleArrayList(GlyfPoint).init(allocator);
-                try re.Shapes.items[index].append(_shape.items[0]);
-                for (1.._shape.items.len) |i| {
-                    if (!_shape.items[i].isOnCurve and !_shape.items[i].isMidpoint) {
-                        var res: f32 = 15;
+            // for (0..re.Shapes.items.len) |BigIndex| {
+            //     var shape = re.Shapes.items[BigIndex];
+            //     var i: u32 = 1;
+            //     while (i < shape.items.len) {
+            //         var a = shape.items[i];
+            //         var b = shape.items[i - 1];
+            //         if (!a.isOnCurve and !b.isOnCurve) {
+            //             var midPoint = MidpointRounding(a, b);
+            //             midPoint.isMidpoint = true;
+            //             try shape.insert(i, midPoint);
+            //             i += 1;
+            //         }
+            //         i += 1;
+            //     }
+            // }
+            // for (0..re.Shapes.items.len) |index| {
+            //     var _shape = try re.Shapes.items[index].clone();
+            //     //mem leak lets GO!!!!
+            //     re.Shapes.items[index] = SingleArrayList(GlyfPoint).init(allocator);
+            //     const gg = _shape.items[0];
+            //     try re.Shapes.items[index].append(gg);
+            //     for (1.._shape.items.len) |i| {
+            //         if (!_shape.items[i].isOnCurve and !_shape.items[i].isMidpoint) {
+            //             var res: f32 = 15;
 
-                        var a: GlyfPoint = if (i == 0) _shape.items[_shape.items.len - 1] else _shape.items[i - 1];
-                        var b: GlyfPoint = _shape.items[i];
-                        var c: GlyfPoint = if ((i + 1) >= _shape.items.len) _shape.items[0] else _shape.items[i + 1];
+            //             var a: GlyfPoint = if (i == 0) _shape.items[_shape.items.len - 1] else _shape.items[i - 1];
+            //             var b: GlyfPoint = _shape.items[i];
+            //             var c: GlyfPoint = if ((i + 1) >= _shape.items.len) _shape.items[0] else _shape.items[i + 1];
 
-                        for (0..@intFromFloat(res)) |j| {
-                            var t = @as(f32, @floatFromInt(j)) / res;
-                            try re.Shapes.items[index].append(GlyfPoint{
-                                .X = Bezier(a.X, b.X, c.X, t),
-                                .Y = Bezier(a.Y, b.Y, c.Y, t),
-                            });
-                        }
-                    } else {
-                        try re.Shapes.items[index].append(_shape.items[i]);
-                    }
-                }
-            }
+            //             for (0..@intFromFloat(res)) |j| {
+            //                 var t = @as(f32, @floatFromInt(j)) / res;
+            //                 try re.Shapes.items[index].append(GlyfPoint{
+            //                     .X = Bezier(a.X, b.X, c.X, t),
+            //                     .Y = Bezier(a.Y, b.Y, c.Y, t),
+            //                 });
+            //             }
+            //         } else {
+            //             try re.Shapes.items[index].append(_shape.items[i]);
+            //         }
+            //     }
+            // }
             // now triangulate glyf
 
             var tess = tessy.tessNewTess(null);
@@ -545,7 +547,7 @@ pub const Glyf = struct {
 
             const verts = tessy.tessGetVertices(tess);
 
-            print("\n", .{});
+            // print("\n", .{});
 
             var tp = SingleArrayList(GlyfPoint).init(allocator);
             defer tp.deinit();
@@ -579,7 +581,7 @@ pub const Glyf = struct {
                 const b = tp.items[(i * 3) + 1];
                 const c = tp.items[(i * 3) + 2];
 
-                print("a = [{d},{d}]; b = [{d},{d}]; c = [{d},{d}]\n", .{ a.X, a.Y, b.X, b.Y, c.X, c.Y });
+                // print("a = [{d},{d}]; b = [{d},{d}]; c = [{d},{d}]\n", .{ a.X, a.Y, b.X, b.Y, c.X, c.Y });
 
                 try re.Triangles.append(
                     ComponentTriangle{
@@ -803,98 +805,98 @@ pub const TrueTypeFontFile = struct {
         // this monstrosity is the result of zig's immutability on consts,
         // and kv pair invalidation on mutation of hashmaps. yeet
         {
-            for (0..self.glyfs.count()) |iter| {
-                if (self.glyfs.get(@intCast(iter)).?.Components.items.len != 0) {
-                    // NOTE: the rest of this code block assumes the clone preserves the exact same kv pairs
-                    var glyfs_clone = try self.glyfs.clone();
-                    var iterator = self.glyfs.iterator();
-                    while (iterator.next()) |glyf_in_a_box| {
-                        var components = glyf_in_a_box.value_ptr.*.Components;
-                        for (components.items) |component| {
-                            try seeker.seekTo(self.glyphOffset + try GetGlyphOffset(
-                                self.glyphOffsetTe,
-                                self.header,
-                                seeker,
-                                reader,
-                                component.GlyphIndex,
-                            ));
-                            var g: Glyf = try Glyf.readGlyph(
-                                self.allocator,
-                                seeker,
-                                reader,
-                                //  maybe this is what the cs did?
-                                // glyf_in_a_box.key_ptr.*,
-                                // but it's more likely to be the latter
-                                @intCast(iter),
-                            );
+            // for (0..self.glyfs.count()) |iter| {
+            //     if (self.glyfs.get(@intCast(iter)).?.Components.items.len != 0) {
+            //         // NOTE: the rest of this code block assumes the clone preserves the exact same kv pairs
+            //         var glyfs_clone = try self.glyfs.clone();
+            //         var iterator = self.glyfs.iterator();
+            //         while (iterator.next()) |glyf_in_a_box| {
+            //             var components = glyf_in_a_box.value_ptr.*.Components;
+            //             for (components.items) |component| {
+            //                 try seeker.seekTo(self.glyphOffset + try GetGlyphOffset(
+            //                     self.glyphOffsetTe,
+            //                     self.header,
+            //                     seeker,
+            //                     reader,
+            //                     component.GlyphIndex,
+            //                 ));
+            //                 var g: Glyf = try Glyf.readGlyph(
+            //                     self.allocator,
+            //                     seeker,
+            //                     reader,
+            //                     //  maybe this is what the cs did?
+            //                     // glyf_in_a_box.key_ptr.*,
+            //                     // but it's more likely to be the latter
+            //                     @intCast(iter),
+            //                 );
 
-                            var shapes = try g.Triangles.clone();
-                            if ((@intFromEnum(component.Flags) & @intFromEnum(ComponentFlags.UseMyMetrics)) > 0) {
-                                // glyfs_clone.getPtr(@intCast(iter)).?.*.xMax = g.xMax;
-                                // glyfs_clone.getPtr(@intCast(iter)).?.*.xMin = g.xMin;
-                                // glyfs_clone.getPtr(@intCast(iter)).?.*.yMax = g.yMax;
-                                // glyfs_clone.getPtr(@intCast(iter)).?.*.yMin = g.yMin;
-                                try glyfs_clone.put(@intCast(iter), g);
-                            }
+            //                 var shapes = try g.Triangles.clone();
+            //                 if ((@intFromEnum(component.Flags) & @intFromEnum(ComponentFlags.UseMyMetrics)) > 0) {
+            //                     // glyfs_clone.getPtr(@intCast(iter)).?.*.xMax = g.xMax;
+            //                     // glyfs_clone.getPtr(@intCast(iter)).?.*.xMin = g.xMin;
+            //                     // glyfs_clone.getPtr(@intCast(iter)).?.*.yMax = g.yMax;
+            //                     // glyfs_clone.getPtr(@intCast(iter)).?.*.yMin = g.yMin;
+            //                     try glyfs_clone.put(@intCast(iter), g);
+            //                 }
 
-                            for (0..shapes.items.len) |t| {
-                                // NOTE: this clobbers the shapes object, yet len is not invalidated as it is a slice
-                                // from what is an ArrayList that has no iterators to invalidate on mutation anyway.
-                                // AND yet we're cloning it ???
+            //                 for (0..shapes.items.len) |t| {
+            //                     // NOTE: this clobbers the shapes object, yet len is not invalidated as it is a slice
+            //                     // from what is an ArrayList that has no iterators to invalidate on mutation anyway.
+            //                     // AND yet we're cloning it ???
 
-                                // shapes.items[t].A.X = component.A * shapes.items[t].A.X + component.B * shapes.items[t].A.Y + component.E;
-                                // shapes.items[t].A.Y = component.C * shapes.items[t].A.X + component.D * shapes.items[t].A.Y + component.F;
-                                // shapes.items[t].B.X = component.A * shapes.items[t].B.X + component.B * shapes.items[t].B.Y + component.E;
-                                // shapes.items[t].B.Y = component.C * shapes.items[t].B.X + component.D * shapes.items[t].B.Y + component.F;
-                                // shapes.items[t].C.X = component.A * shapes.items[t].C.X + component.B * shapes.items[t].C.Y + component.E;
-                                // shapes.items[t].C.Y = component.C * shapes.items[t].C.X + component.D * shapes.items[t].C.Y + component.F;
+            //                     // shapes.items[t].A.X = component.A * shapes.items[t].A.X + component.B * shapes.items[t].A.Y + component.E;
+            //                     // shapes.items[t].A.Y = component.C * shapes.items[t].A.X + component.D * shapes.items[t].A.Y + component.F;
+            //                     // shapes.items[t].B.X = component.A * shapes.items[t].B.X + component.B * shapes.items[t].B.Y + component.E;
+            //                     // shapes.items[t].B.Y = component.C * shapes.items[t].B.X + component.D * shapes.items[t].B.Y + component.F;
+            //                     // shapes.items[t].C.X = component.A * shapes.items[t].C.X + component.B * shapes.items[t].C.Y + component.E;
+            //                     // shapes.items[t].C.Y = component.C * shapes.items[t].C.X + component.D * shapes.items[t].C.Y + component.F;
 
-                                // the following code fixes the casting issues.. but at what cost
+            //                     // the following code fixes the casting issues.. but at what cost
 
-                                var temp = shapes.items[t];
-                                // stand-in jit type def 'cause zig won't let me use an anon one :(
-                                const casted_component_t = struct {
-                                    A: f32 = undefined,
-                                    B: f32 = undefined,
-                                    C: f32 = undefined,
-                                    D: f32 = undefined,
-                                    E: f32 = undefined,
-                                    F: f32 = undefined,
-                                };
-                                var casted_component = casted_component_t{
-                                    .A = @as(f32, @floatFromInt(component.A)),
-                                    .B = @as(f32, @floatFromInt(component.B)),
-                                    .C = @as(f32, @floatFromInt(component.C)),
-                                    .D = @as(f32, @floatFromInt(component.D)),
-                                    .E = @as(f32, @floatFromInt(component.E)),
-                                    .F = @as(f32, @floatFromInt(component.F)),
-                                };
-                                shapes.items[t] = ComponentTriangle{
-                                    .A = GlyfPoint{
-                                        .X = casted_component.A * temp.A.X + casted_component.B * temp.A.Y + casted_component.E,
-                                        .Y = casted_component.C * temp.A.X + casted_component.D * temp.A.Y + casted_component.F,
-                                    },
-                                    .B = GlyfPoint{
-                                        .X = casted_component.A * temp.B.X + casted_component.B * temp.B.Y + casted_component.E,
-                                        .Y = casted_component.C * temp.B.X + casted_component.D * temp.B.Y + casted_component.F,
-                                    },
-                                    .C = GlyfPoint{
-                                        .X = casted_component.A * temp.C.X + casted_component.B * temp.C.Y + casted_component.E,
-                                        .Y = casted_component.C * temp.C.X + casted_component.D * temp.C.Y + casted_component.F,
-                                    },
-                                };
-                            }
-                            // HACK: insane bs again
-                            var glyfs_clone_iterator = glyfs_clone.iterator();
-                            while (glyfs_clone_iterator.next()) |glyfs_clone_delivery| {
-                                for (shapes.items) |shape| {
-                                    try glyfs_clone_delivery.value_ptr.Triangles.append(shape);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            //                     var temp = shapes.items[t];
+            //                     // stand-in jit type def 'cause zig won't let me use an anon one :(
+            //                     const casted_component_t = struct {
+            //                         A: f32 = undefined,
+            //                         B: f32 = undefined,
+            //                         C: f32 = undefined,
+            //                         D: f32 = undefined,
+            //                         E: f32 = undefined,
+            //                         F: f32 = undefined,
+            //                     };
+            //                     var casted_component = casted_component_t{
+            //                         .A = @as(f32, @floatFromInt(component.A)),
+            //                         .B = @as(f32, @floatFromInt(component.B)),
+            //                         .C = @as(f32, @floatFromInt(component.C)),
+            //                         .D = @as(f32, @floatFromInt(component.D)),
+            //                         .E = @as(f32, @floatFromInt(component.E)),
+            //                         .F = @as(f32, @floatFromInt(component.F)),
+            //                     };
+            //                     shapes.items[t] = ComponentTriangle{
+            //                         .A = GlyfPoint{
+            //                             .X = casted_component.A * temp.A.X + casted_component.B * temp.A.Y + casted_component.E,
+            //                             .Y = casted_component.C * temp.A.X + casted_component.D * temp.A.Y + casted_component.F,
+            //                         },
+            //                         .B = GlyfPoint{
+            //                             .X = casted_component.A * temp.B.X + casted_component.B * temp.B.Y + casted_component.E,
+            //                             .Y = casted_component.C * temp.B.X + casted_component.D * temp.B.Y + casted_component.F,
+            //                         },
+            //                         .C = GlyfPoint{
+            //                             .X = casted_component.A * temp.C.X + casted_component.B * temp.C.Y + casted_component.E,
+            //                             .Y = casted_component.C * temp.C.X + casted_component.D * temp.C.Y + casted_component.F,
+            //                         },
+            //                     };
+            //                 }
+            //                 // HACK: insane bs again
+            //                 var glyfs_clone_iterator = glyfs_clone.iterator();
+            //                 while (glyfs_clone_iterator.next()) |glyfs_clone_delivery| {
+            //                     for (shapes.items) |shape| {
+            //                         try glyfs_clone_delivery.value_ptr.Triangles.append(shape);
+            //                     }
+            //                 }
+            //             }
+            //         }
+            //     }
+            //}
         }
     }
     // TODO: deinit enough to stop the leakage
@@ -922,14 +924,4 @@ pub fn main() !void {
     var fontFile = TrueTypeFontFile{};
     _ = fontFile.init(cator);
     try fontFile.load_file("Hack-Regular.ttf");
-
-    std.debug.print("pre call of libtess2 \n", .{});
-
-    const tess = tessy.tessNewTess(null);
-    if (tess == null)
-        print("Death\n", .{});
-
-    tessy.tessSetOption(tess, tessy.TESS_CONSTRAINED_DELAUNAY_TRIANGULATION, 1);
-
-    std.debug.print("post call of libtess2\n", .{});
 }
