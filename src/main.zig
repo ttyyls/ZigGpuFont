@@ -937,21 +937,21 @@ pub fn main() !void {
     }
 
     gl.glfwWindowHint(gl.GLFW_SAMPLES, 4);
-    gl.glfwWindowHint(gl.GLFW_CONTEXT_VERSION_MAJOR, 3); // We want OpenGL 3.3
-    gl.glfwWindowHint(gl.GLFW_CONTEXT_VERSION_MINOR, 3);
-    gl.glfwWindowHint(gl.GLFW_OPENGL_FORWARD_COMPAT, gl.GL_TRUE); // To make MacOS happy; should not be needed
-    gl.glfwWindowHint(gl.GLFW_OPENGL_PROFILE, gl.GLFW_OPENGL_CORE_PROFILE); // We don't want the old OpenGL
+    gl.glfwWindowHint(gl.GLFW_CONTEXT_VERSION_MAJOR, 2);
+    gl.glfwWindowHint(gl.GLFW_CONTEXT_VERSION_MINOR, 1);
+    gl.glfwWindowHint(gl.GLFW_OPENGL_FORWARD_COMPAT, gl.GL_TRUE);
+    gl.glfwWindowHint(gl.GLFW_OPENGL_PROFILE, gl.GLFW_OPENGL_CORE_PROFILE);
 
     // Open a window and create its OpenGL context
     var window: ?*gl.GLFWwindow = undefined;
     window = gl.glfwCreateWindow(1024, 768, "Window", null, null);
 
     if (window == null) {
-        @panic("Failed to open GLFW window. If you have an Intel GPU, they are not 3.3 compatible. Try the 2.1 version of the tutorials.\n");
+        @panic("Failed to open GLFW window.");
     }
     gl.glfwMakeContextCurrent(window); // Initialize GLEW
     glewExperimental = true; // Needed in core profile
     if (gl.glewInit() != gl.GLEW_OK) {
-        @panic("Failed to initialize GLEW\n");
+        @panic("Failed to initialize GLEW");
     }
 }

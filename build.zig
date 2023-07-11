@@ -19,6 +19,9 @@ pub fn build(b: *std.Build) void {
 
     exe.linkLibrary(libtess_dep.artifact("libtess2"));
     exe.addIncludePath("/usr/include");
+    exe.linkSystemLibrary("x11");
+    exe.linkSystemLibrary("gl");
+    exe.linkSystemLibrary("glu");
     exe.linkSystemLibrary("glew");
     exe.linkSystemLibrary("glfw3");
     exe.linkLibC();
