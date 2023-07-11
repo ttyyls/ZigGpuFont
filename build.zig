@@ -18,6 +18,10 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.linkLibrary(libtess_dep.artifact("libtess2"));
+    exe.addIncludePath("/usr/include");
+    exe.linkSystemLibrary("glew");
+    exe.linkSystemLibrary("glfw3");
+    exe.linkLibC();
 
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);

@@ -1,4 +1,10 @@
 const std = @import("std");
+const gl = @cImport({
+    @cInclude("stdio.h");
+    @cInclude("stdlib.h");
+    @cInclude("GL/glew.h");
+    @cInclude("GLFW/glfw3.h");
+});
 const tessy = @cImport({
     @cInclude("tesselator.h");
 });
@@ -924,4 +930,28 @@ pub fn main() !void {
     var fontFile = TrueTypeFontFile{};
     _ = fontFile.init(cator);
     try fontFile.load_file("Hack-Regular.ttf");
+
+    var glewExperimental = true;
+    if (gl.glfwInit() != gl.GLFW_TRUE) {
+        @panic("Failed to initialize GLFW\n");
+    }
+
+    gl.glfwWindowHint(gl.GLFW_SAMPLES, 4);
+    gl.glfwWindowHint(gl.GLFW_CONTEXT_VERSION_MAJOR, 3); // We want OpenGL 3.3
+    gl.glfwWindowHint(gl.GLFW_CONTEXT_VERSION_MINOR, 3);
+    gl.glfwWindowHint(gl.GLFW_OPENGL_FORWARD_COMPAT, gl.GL_TRUE); // To make MacOS happy; should not be needed
+    gl.glfwWindowHint(gl.GLFW_OPENGL_PROFILE, gl.GLFW_OPENGL_CORE_PROFILE); // We don't want the old OpenGL
+
+    // Open a window and create its OpenGL context
+    var window: ?*gl.GLFWwindow = undefined;
+    window = gl.glfwCreateWindow(1024, 768, "Window", null, null);
+
+    if (window == null) {
+        @panic("Failed to open GLFW window. If you have an Intel GPU, they are not 3.3 compatible. Try the 2.1 version of the tutorials.\n");
+    }
+    gl.glfwMakeContextCurrent(window); // Initialize GLEW
+    glewExperimental = true; // Needed in core profile
+    if (gl.glewInit() != gl.GLEW_OK) {
+        @panic("Failed to initialize GLEW\n");
+    }
 }
